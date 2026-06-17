@@ -6,7 +6,13 @@ from aiogram.types import BotCommand
 
 from config import Settings
 from app.db.base import init_db, init_engine
-from app.handlers import commands, onboarding, settings as settings_handlers, tasks
+from app.handlers import (
+    commands,
+    errors,
+    onboarding,
+    settings as settings_handlers,
+    tasks,
+)
 from app.services.gemini import GeminiService
 from app.services.scheduler import start_scheduler
 
@@ -42,13 +48,19 @@ async def main() -> None:
     dp.include_router(settings_handlers.router)
     dp.include_router(commands.router)
     dp.include_router(tasks.router)
+    dp.include_router(errors.router)
 
     await bot.set_my_commands(BOT_COMMANDS)
 
-    start_scheduler(bot, settings.tick_interval)
+    scheduler = start_scheduler(bot, settings.tick_interval)
 
     logging.info("Bot started, polling...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        scheduler.shutdown(wait=False)
+        await bot.session.close()
+        logging.info("Bot stopped.")
 
 
 if __name__ == "__main__":

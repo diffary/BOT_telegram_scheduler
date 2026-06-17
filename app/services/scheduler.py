@@ -1,13 +1,17 @@
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.db import repo
 from app.db.base import get_sessionmaker
-from app.services.occurrences import is_reminder_due, occurrence_on_date
+from app.services.occurrences import (
+    build_occurrences,
+    is_reminder_due,
+    occurrence_on_date,
+)
 from app.utils.formatting import format_day_list
-from app.utils.tz import to_local, to_utc
+from app.utils.tz import to_local
 
 log = logging.getLogger(__name__)
 
@@ -45,14 +49,10 @@ async def collect_digests(session, now_utc: datetime):
         if local_now.strftime("%H:%M") != user.digest_time:
             continue
         today = local_now.date()
-        start_utc = to_utc(datetime.combine(today, time.min), user.timezone)
-        end_utc = to_utc(
-            datetime.combine(today + timedelta(days=1), time.min), user.timezone
-        )
-        tasks = await repo.get_user_tasks_in_range(
-            session, user.id, start_utc, end_utc
-        )
-        result.append((user, tasks))
+        # как и в /today — раскрываем повторы на сегодня
+        tasks = await repo.list_user_tasks(session, user.id)
+        occurrences = build_occurrences(tasks, today, today, user.timezone)
+        result.append((user, occurrences))
     return result
 
 

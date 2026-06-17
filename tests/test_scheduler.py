@@ -72,6 +72,24 @@ async def test_collect_digests_respects_time_and_toggle(maker):
         assert len(hit) == 1 and hit[0][0].id == u.id
 
 
+async def test_collect_digests_includes_recurring(maker):
+    async with maker() as s:
+        u = await repo.get_or_create_user(s, 1, "a", "Europe/Moscow")
+        # ежедневная задача, якорь в прошлом (08:00 MSK = 05:00 UTC)
+        await repo.create_task(
+            s, u.id, "зарядка", "r", datetime(2026, 6, 10, 5, 0),
+            recurrence="daily",
+        )
+        # 06:00 UTC == 09:00 MSK == дефолтное время дайджеста
+        hit = await scheduler.collect_digests(
+            s, now_utc=datetime(2026, 6, 17, 6, 0)
+        )
+    assert len(hit) == 1
+    user, occurrences = hit[0]
+    titles = [o.title for o in occurrences]
+    assert "зарядка" in titles  # повтор раскрылся на сегодня
+
+
 async def test_collect_digests_skips_disabled(maker):
     async with maker() as s:
         u = await repo.get_or_create_user(s, 1, "a", "Europe/Moscow")

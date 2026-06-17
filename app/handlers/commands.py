@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -16,7 +16,7 @@ from app.utils.formatting import (
     format_grouped_by_day,
     recurrence_label,
 )
-from app.utils.tz import to_local
+from app.utils.tz import to_local, to_utc
 from config import Settings
 
 router = Router()
@@ -60,6 +60,10 @@ async def manage_cmd(message: Message, settings: Settings) -> None:
             settings.default_tz,
         )
         tz_name = user.timezone
+        # подчищаем разовые задачи прошлых дней, чтобы не висели в управлении
+        today = to_local(_utc_now_naive(), tz_name).date()
+        day_start_utc = to_utc(datetime.combine(today, time.min), tz_name)
+        await repo.delete_past_one_off(session, user.id, day_start_utc)
         tasks = await repo.list_user_tasks(session, user.id)
 
     if not tasks:

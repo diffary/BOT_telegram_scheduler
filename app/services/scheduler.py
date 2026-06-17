@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -11,7 +11,7 @@ from app.services.occurrences import (
     occurrence_on_date,
 )
 from app.utils.formatting import format_day_list
-from app.utils.tz import to_local
+from app.utils.tz import to_local, to_utc
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +56,17 @@ async def collect_digests(session, now_utc: datetime):
     return result
 
 
+async def cleanup_past_tasks(session, now_utc: datetime) -> int:
+    """Удалить разовые задачи всех пользователей, чьё время прошло до начала
+    их сегодняшнего локального дня. Возвращает общее число удалённых."""
+    deleted = 0
+    for user in await repo.all_users(session):
+        local_today = to_local(now_utc, user.timezone).date()
+        day_start_utc = to_utc(datetime.combine(local_today, time.min), user.timezone)
+        deleted += await repo.delete_past_one_off(session, user.id, day_start_utc)
+    return deleted
+
+
 def make_tick(bot):
     """Создать корутину-тик. bot — для отправки сообщений."""
     # Защита от повторной отправки дайджеста в ту же минуту/при дребезге.
@@ -66,6 +77,10 @@ def make_tick(bot):
         maker = get_sessionmaker()
         async with maker() as session:
             try:
+                removed = await cleanup_past_tasks(session, now_utc)
+                if removed:
+                    log.info("cleaned up %d past one-off task(s)", removed)
+
                 for user, task, occ in await collect_due_reminders(session, now_utc):
                     try:
                         local = to_local(occ, user.timezone)

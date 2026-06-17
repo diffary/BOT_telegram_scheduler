@@ -100,6 +100,24 @@ async def test_collect_digests_skips_disabled(maker):
     assert hit == []
 
 
+async def test_cleanup_past_tasks_removes_only_old_one_off(maker):
+    async with maker() as s:
+        u = await repo.get_or_create_user(s, 1, "a", "Europe/Moscow")
+        await repo.create_task(s, u.id, "old", "r", datetime(2026, 6, 16, 9, 0))
+        await repo.create_task(
+            s, u.id, "recurring", "r", datetime(2026, 6, 10, 9, 0),
+            recurrence="weekly", recurrence_weekday=2,
+        )
+        # now = 18.06 06:00 UTC == 09:00 MSK, локальный сегодня = 18.06
+        deleted = await scheduler.cleanup_past_tasks(
+            s, now_utc=datetime(2026, 6, 18, 6, 0)
+        )
+        titles = [t.title for t in await repo.list_user_tasks(s, u.id)]
+    assert deleted == 1
+    assert "old" not in titles
+    assert "recurring" in titles
+
+
 async def test_tick_sends_reminder_and_marks(maker, monkeypatch):
     # make_tick использует глобальный get_sessionmaker -> подменяем на наш maker
     monkeypatch.setattr(scheduler, "get_sessionmaker", lambda: maker)

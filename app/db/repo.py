@@ -161,6 +161,24 @@ async def delete_task(
     await session.commit()
 
 
+async def delete_past_one_off(
+    session: AsyncSession, user_id: int, before_utc: datetime
+) -> int:
+    """Удалить РАЗОВЫЕ задачи пользователя со временем раньше before_utc.
+
+    Повторяющиеся (recurrence != 'none') не трогаются. Возвращает число удалённых.
+    """
+    res = await session.execute(
+        delete(Task).where(
+            Task.user_id == user_id,
+            Task.recurrence == "none",
+            Task.due_at_utc < before_utc,
+        )
+    )
+    await session.commit()
+    return res.rowcount or 0
+
+
 async def update_last_reminded(
     session: AsyncSession, task_id: int, day: date
 ) -> None:

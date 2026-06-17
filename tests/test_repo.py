@@ -123,6 +123,24 @@ async def test_delete_task(session):
     ) == []
 
 
+async def test_delete_past_one_off(session):
+    u = await repo.get_or_create_user(session, 1, "a", "Europe/Moscow")
+    await repo.create_task(session, u.id, "вчерашняя", "r",
+                           datetime(2026, 6, 16, 9, 0))  # разовая, прошлый день
+    await repo.create_task(session, u.id, "сегодня", "r",
+                           datetime(2026, 6, 18, 9, 0))  # разовая, сегодня
+    await repo.create_task(session, u.id, "повтор", "r",
+                           datetime(2026, 6, 10, 9, 0), recurrence="daily")
+
+    before = datetime(2026, 6, 18, 0, 0)  # начало сегодняшнего дня (UTC)
+    n = await repo.delete_past_one_off(session, u.id, before)
+
+    assert n == 1  # удалилась только вчерашняя разовая
+    titles = [t.title for t in await repo.list_user_tasks(session, u.id)]
+    assert "вчерашняя" not in titles
+    assert "сегодня" in titles and "повтор" in titles
+
+
 async def test_update_last_reminded(session):
     user = await repo.get_or_create_user(session, 1, "a", "Europe/Moscow")
     task = await repo.create_task(

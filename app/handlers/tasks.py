@@ -11,7 +11,7 @@ from app.db.base import get_sessionmaker
 from app.keyboards.inline import confirm_kb, task_actions_kb
 from app.services.gemini import GeminiService, GeminiUnavailable
 from app.services.parser import NeedsClarification, parse
-from app.states import EditTask
+from app.states import EditDraft, EditTask
 from app.utils.tz import to_local
 from config import Settings
 
@@ -48,6 +48,18 @@ async def _resolve_user(tg_user, settings: Settings):
 
 def _now_local_str(tz_name: str) -> str:
     return to_local(_utc_now_naive(), tz_name).strftime("%Y-%m-%d %H:%M")
+
+
+def _draft_dict(parsed, tz_name: str) -> dict:
+    """Сериализуемое представление черновика для FSM-хранилища."""
+    return {
+        "title": parsed.title,
+        "raw_text": parsed.raw_text,
+        "due_at_utc": parsed.due_at_utc.isoformat(),
+        "recurrence": parsed.recurrence,
+        "recurrence_weekday": parsed.recurrence_weekday,
+        "tz_name": tz_name,
+    }
 
 
 async def _safe_parse(raw_awaitable, tz_name: str, raw_text: str):
@@ -96,16 +108,7 @@ async def on_free_text(
         await thinking.edit_text(error)
         return
 
-    await state.update_data(
-        draft={
-            "title": parsed.title,
-            "raw_text": parsed.raw_text,
-            "due_at_utc": parsed.due_at_utc.isoformat(),
-            "recurrence": parsed.recurrence,
-            "recurrence_weekday": parsed.recurrence_weekday,
-            "tz_name": tz_name,
-        }
-    )
+    await state.update_data(draft=_draft_dict(parsed, tz_name))
     card = _format_card(parsed.title, parsed.due_at_utc, parsed.recurrence, tz_name)
     await thinking.edit_text("Сохранить задачу?\n\n" + card, reply_markup=confirm_kb())
 
@@ -146,9 +149,51 @@ async def on_save(cb: CallbackQuery, state: FSMContext, settings: Settings) -> N
 
 @router.callback_query(F.data == "task:edit")
 async def on_draft_edit(cb: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await cb.message.edit_text("Ок, пришли исправленную формулировку задачи 👇")
+    draft = (await state.get_data()).get("draft")
+    if not draft:
+        await cb.answer("Черновик не найден, начни заново.", show_alert=True)
+        return
+    await state.set_state(EditDraft.waiting_text)
+    await cb.message.answer(
+        "✏️ Что изменить? Можно дописать («и ещё помыть собаку»), "
+        "перенести время («в 10») или переформулировать. /cancel — отмена."
+    )
     await cb.answer()
+
+
+@router.message(EditDraft.waiting_text, F.text & ~F.text.startswith("/"))
+async def on_draft_edit_text(
+    message: Message,
+    state: FSMContext,
+    gemini: GeminiService,
+    settings: Settings,
+) -> None:
+    draft = (await state.get_data()).get("draft")
+    if not draft:
+        await state.clear()
+        await message.answer("Черновик не найден, начни заново.")
+        return
+    _, tz_name = await _resolve_user(message.from_user, settings)
+    thinking = await message.answer("🤔 Разбираю…")
+
+    current = {
+        "title": draft["title"],
+        "datetime_local": to_local(
+            datetime.fromisoformat(draft["due_at_utc"]), draft["tz_name"]
+        ).strftime("%Y-%m-%d %H:%M"),
+        "recurrence": draft["recurrence"],
+        "weekday": draft["recurrence_weekday"],
+    }
+    raw = gemini.amend_text(message.text, current, tz_name, _now_local_str(tz_name))
+    parsed, error = await _safe_parse(raw, tz_name, message.text)
+    if error:
+        await thinking.edit_text(error)
+        return
+
+    await state.update_data(draft=_draft_dict(parsed, tz_name))
+    await state.set_state(None)  # назад в режим превью (черновик сохранён в data)
+    card = _format_card(parsed.title, parsed.due_at_utc, parsed.recurrence, tz_name)
+    await thinking.edit_text("Сохранить задачу?\n\n" + card, reply_markup=confirm_kb())
 
 
 @router.callback_query(F.data == "task:cancel")

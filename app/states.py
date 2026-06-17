@@ -2,7 +2,13 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class EditTask(StatesGroup):
-    """Ожидание новой формулировки при редактировании задачи."""
+    """Ожидание новой формулировки при редактировании сохранённой задачи."""
+
+    waiting_text = State()
+
+
+class EditDraft(StatesGroup):
+    """Ожидание правки ещё не сохранённого черновика (на превью)."""
 
     waiting_text = State()
 

@@ -16,6 +16,7 @@ BOT_COMMANDS = [
     BotCommand(command="start", description="Запуск / приветствие"),
     BotCommand(command="today", description="Задачи на сегодня"),
     BotCommand(command="list", description="Список задач"),
+    BotCommand(command="manage", description="Изменить/удалить задачи"),
     BotCommand(command="timezone", description="Часовой пояс"),
     BotCommand(command="settings", description="Настройки и напоминания"),
     BotCommand(command="help", description="Помощь"),

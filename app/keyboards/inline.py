@@ -12,3 +12,19 @@ def confirm_kb() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def task_actions_kb(task_id: int) -> InlineKeyboardMarkup:
+    """Кнопки действий над сохранённой задачей."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Изменить", callback_data=f"edit:{task_id}"
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Удалить", callback_data=f"del:{task_id}"
+                ),
+            ]
+        ]
+    )

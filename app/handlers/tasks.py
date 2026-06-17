@@ -2,14 +2,16 @@ import logging
 from datetime import datetime, timezone
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.db import repo
 from app.db.base import get_sessionmaker
-from app.keyboards.inline import confirm_kb
+from app.keyboards.inline import confirm_kb, task_actions_kb
 from app.services.gemini import GeminiService, GeminiUnavailable
 from app.services.parser import NeedsClarification, ParseError, parse
+from app.states import EditTask
 from app.utils.tz import to_local
 from config import Settings
 
@@ -34,48 +36,56 @@ def _format_card(title: str, due_at_utc: datetime, recurrence: str, tz_name: str
     return f"📝 {title}\n🕒 {local:%d.%m.%Y %H:%M}{label}"
 
 
-@router.message(F.text & ~F.text.startswith("/"))
+async def _resolve_user(tg_user, settings: Settings):
+    """Найти/создать пользователя, вернуть (user_id, tz_name)."""
+    maker = get_sessionmaker()
+    async with maker() as session:
+        user = await repo.get_or_create_user(
+            session, tg_user.id, tg_user.username, settings.default_tz
+        )
+        return user.id, user.timezone
+
+
+async def _try_parse(text: str, gemini: GeminiService, tz_name: str):
+    """Распознать текст в задачу. Вернуть (ParsedTask|None, error_message|None)."""
+    now_local = to_local(_utc_now_naive(), tz_name).strftime("%Y-%m-%d %H:%M")
+    try:
+        raw = await gemini.parse_text(text, tz_name, now_local)
+        return parse(raw, tz_name, text), None
+    except NeedsClarification:
+        return None, (
+            "Не понял, на когда это запланировать. Уточни дату и время — "
+            "например: «завтра в 15» или «25.06 в 9:00»."
+        )
+    except GeminiUnavailable as exc:
+        log.warning("gemini unavailable: %r", exc)
+        return None, (
+            "Сервис распознавания сейчас перегружен 😕 "
+            "Попробуй ещё раз через пару секунд."
+        )
+    except (ParseError, Exception) as exc:  # кривой JSON и т.п.
+        log.warning("parse failed: %r", exc)
+        return None, (
+            "Не смог разобрать 🤔 Попробуй переформулировать, "
+            "например: «завтра в 15 встреча с врачом»."
+        )
+
+
+# --- создание задачи (свободный текст в обычном состоянии) ---
+
+@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
 async def on_free_text(
     message: Message,
     state: FSMContext,
     gemini: GeminiService,
     settings: Settings,
 ) -> None:
-    maker = get_sessionmaker()
-    async with maker() as session:
-        user = await repo.get_or_create_user(
-            session,
-            message.from_user.id,
-            message.from_user.username,
-            settings.default_tz,
-        )
-        tz_name = user.timezone
-
-    now_local = to_local(_utc_now_naive(), tz_name).strftime("%Y-%m-%d %H:%M")
+    _, tz_name = await _resolve_user(message.from_user, settings)
     thinking = await message.answer("🤔 Разбираю…")
 
-    try:
-        raw = await gemini.parse_text(message.text, tz_name, now_local)
-        parsed = parse(raw, tz_name, message.text)
-    except NeedsClarification:
-        await thinking.edit_text(
-            "Не понял, на когда это запланировать. Уточни дату и время — "
-            "например: «завтра в 15» или «25.06 в 9:00»."
-        )
-        return
-    except GeminiUnavailable as exc:
-        log.warning("gemini unavailable: %r", exc)
-        await thinking.edit_text(
-            "Сервис распознавания сейчас перегружен 😕 "
-            "Попробуй ещё раз через пару секунд."
-        )
-        return
-    except Exception as exc:  # ParseError, кривой JSON и т.п.
-        log.warning("free-text parse failed: %r", exc)
-        await thinking.edit_text(
-            "Не смог разобрать 🤔 Попробуй переформулировать, "
-            "например: «завтра в 15 встреча с врачом»."
-        )
+    parsed, error = await _try_parse(message.text, gemini, tz_name)
+    if error:
+        await thinking.edit_text(error)
         return
 
     await state.update_data(
@@ -102,12 +112,9 @@ async def on_save(cb: CallbackQuery, state: FSMContext, settings: Settings) -> N
     maker = get_sessionmaker()
     async with maker() as session:
         user = await repo.get_or_create_user(
-            session,
-            cb.from_user.id,
-            cb.from_user.username,
-            settings.default_tz,
+            session, cb.from_user.id, cb.from_user.username, settings.default_tz
         )
-        await repo.create_task(
+        task = await repo.create_task(
             session,
             user_id=user.id,
             title=draft["title"],
@@ -123,12 +130,14 @@ async def on_save(cb: CallbackQuery, state: FSMContext, settings: Settings) -> N
         draft["recurrence"],
         draft["tz_name"],
     )
-    await cb.message.edit_text("✅ Сохранено:\n\n" + card)
+    await cb.message.edit_text(
+        "✅ Сохранено:\n\n" + card, reply_markup=task_actions_kb(task.id)
+    )
     await cb.answer("Готово")
 
 
 @router.callback_query(F.data == "task:edit")
-async def on_edit(cb: CallbackQuery, state: FSMContext) -> None:
+async def on_draft_edit(cb: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await cb.message.edit_text("Ок, пришли исправленную формулировку задачи 👇")
     await cb.answer()
@@ -139,3 +148,79 @@ async def on_cancel(cb: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await cb.message.edit_text("Отменено.")
     await cb.answer()
+
+
+# --- удаление ---
+
+@router.callback_query(F.data.startswith("del:"))
+async def on_delete(cb: CallbackQuery, settings: Settings) -> None:
+    task_id = int(cb.data.split(":")[1])
+    user_id, _ = await _resolve_user(cb.from_user, settings)
+    maker = get_sessionmaker()
+    async with maker() as session:
+        await repo.delete_task(session, task_id, user_id)
+    await cb.message.edit_text("🗑 Задача удалена.")
+    await cb.answer("Удалено")
+
+
+# --- редактирование ---
+
+@router.callback_query(F.data.startswith("edit:"))
+async def on_edit_request(
+    cb: CallbackQuery, state: FSMContext, settings: Settings
+) -> None:
+    task_id = int(cb.data.split(":")[1])
+    user_id, _ = await _resolve_user(cb.from_user, settings)
+    maker = get_sessionmaker()
+    async with maker() as session:
+        task = await repo.get_task(session, task_id, user_id)
+    if task is None:
+        await cb.answer("Задача не найдена.", show_alert=True)
+        return
+
+    await state.set_state(EditTask.waiting_text)
+    await state.update_data(edit_task_id=task_id)
+    await cb.message.answer(
+        "✏️ Пришли новую формулировку задачи (что и когда). /cancel — отмена."
+    )
+    await cb.answer()
+
+
+@router.message(EditTask.waiting_text, F.text & ~F.text.startswith("/"))
+async def on_edit_text(
+    message: Message,
+    state: FSMContext,
+    gemini: GeminiService,
+    settings: Settings,
+) -> None:
+    task_id = (await state.get_data()).get("edit_task_id")
+    user_id, tz_name = await _resolve_user(message.from_user, settings)
+    thinking = await message.answer("🤔 Разбираю…")
+
+    parsed, error = await _try_parse(message.text, gemini, tz_name)
+    if error:
+        # остаёмся в режиме редактирования — можно прислать ещё раз
+        await thinking.edit_text(error)
+        return
+
+    maker = get_sessionmaker()
+    async with maker() as session:
+        updated = await repo.update_task(
+            session,
+            task_id,
+            user_id,
+            title=parsed.title,
+            raw_text=parsed.raw_text,
+            due_at_utc=parsed.due_at_utc,
+            recurrence=parsed.recurrence,
+            recurrence_weekday=parsed.recurrence_weekday,
+        )
+    await state.clear()
+    if updated is None:
+        await thinking.edit_text("Задача не найдена 🤔")
+        return
+
+    card = _format_card(parsed.title, parsed.due_at_utc, parsed.recurrence, tz_name)
+    await thinking.edit_text(
+        "✏️ Обновлено:\n\n" + card, reply_markup=task_actions_kb(task_id)
+    )

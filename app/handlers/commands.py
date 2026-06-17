@@ -7,12 +7,14 @@ from aiogram.types import Message
 
 from app.db import repo
 from app.db.base import get_sessionmaker
+from app.keyboards.inline import task_actions_kb
 from app.services.occurrences import build_occurrences
 from app.utils.dates import parse_date_arg
 from app.utils.formatting import (
     format_day_list,
     format_day_sections,
     format_grouped_by_day,
+    recurrence_label,
 )
 from app.utils.tz import to_local
 from config import Settings
@@ -27,6 +29,7 @@ HELP_TEXT = (
     "Команды:\n"
     "/today — задачи на сегодня\n"
     "/list — задачи на дату/период (напр. /list завтра, /list 20.06, /list неделя)\n"
+    "/manage — изменить или удалить задачи\n"
     "/timezone — часовой пояс\n"
     "/settings — напоминания и дайджест\n"
     "/cancel — отменить текущее действие"
@@ -46,6 +49,32 @@ async def help_cmd(message: Message) -> None:
 async def cancel_cmd(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Отменено.")
+
+
+@router.message(Command("manage"))
+async def manage_cmd(message: Message, settings: Settings) -> None:
+    maker = get_sessionmaker()
+    async with maker() as session:
+        user = await repo.get_or_create_user(
+            session, message.from_user.id, message.from_user.username,
+            settings.default_tz,
+        )
+        tz_name = user.timezone
+        tasks = await repo.list_user_tasks(session, user.id)
+
+    if not tasks:
+        await message.answer(
+            "У тебя пока нет задач. Напиши, например: «завтра в 15 встреча»."
+        )
+        return
+
+    await message.answer("🗂 Твои задачи — измени или удали:")
+    for task in tasks:
+        local = to_local(task.due_at_utc, tz_name)
+        label = recurrence_label(task.recurrence)
+        suffix = f"  · {label}" if label else ""
+        text = f"📝 {task.title}\n🕒 {local:%d.%m.%Y %H:%M}{suffix}"
+        await message.answer(text, reply_markup=task_actions_kb(task.id))
 
 
 @router.message(Command("today"))

@@ -127,14 +127,21 @@ async def get_user_tasks_in_range(
     return list(res.scalars().all())
 
 
+async def get_task(
+    session: AsyncSession, task_id: int, user_id: int
+) -> Task | None:
+    """Вернуть задачу пользователя по id или None."""
+    res = await session.execute(
+        select(Task).where(Task.id == task_id, Task.user_id == user_id)
+    )
+    return res.scalar_one_or_none()
+
+
 async def update_task(
     session: AsyncSession, task_id: int, user_id: int, **fields
 ) -> Task | None:
     """Обновить поля задачи (только своей). Вернуть задачу или None."""
-    res = await session.execute(
-        select(Task).where(Task.id == task_id, Task.user_id == user_id)
-    )
-    task = res.scalar_one_or_none()
+    task = await get_task(session, task_id, user_id)
     if task is None:
         return None
     for key, value in fields.items():

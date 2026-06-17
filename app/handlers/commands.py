@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timezone
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -7,13 +7,14 @@ from aiogram.types import Message
 
 from app.db import repo
 from app.db.base import get_sessionmaker
+from app.services.occurrences import build_occurrences
 from app.utils.dates import parse_date_arg
 from app.utils.formatting import (
     format_day_list,
     format_day_sections,
     format_grouped_by_day,
 )
-from app.utils.tz import to_local, to_utc
+from app.utils.tz import to_local
 from config import Settings
 
 router = Router()
@@ -34,13 +35,6 @@ HELP_TEXT = (
 
 def _utc_now_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def _day_bounds_utc(start_d, end_d, tz_name):
-    """Локальный диапазон дней [start_d .. end_d] -> границы в UTC [start, end)."""
-    start_utc = to_utc(datetime.combine(start_d, time.min), tz_name)
-    end_utc = to_utc(datetime.combine(end_d + timedelta(days=1), time.min), tz_name)
-    return start_utc, end_utc
 
 
 @router.message(Command("help"))
@@ -65,12 +59,10 @@ async def today_cmd(message: Message, settings: Settings) -> None:
         tz_name = user.timezone
         now_utc = _utc_now_naive()
         today = to_local(now_utc, tz_name).date()
-        start_utc, end_utc = _day_bounds_utc(today, today, tz_name)
-        tasks = await repo.get_user_tasks_in_range(
-            session, user.id, start_utc, end_utc
-        )
+        tasks = await repo.list_user_tasks(session, user.id)
+    occurrences = build_occurrences(tasks, today, today, tz_name)
     await message.answer(
-        format_day_sections(tasks, tz_name, "📅 Сегодня", now_utc)
+        format_day_sections(occurrences, tz_name, "📅 Сегодня", now_utc)
     )
 
 
@@ -96,19 +88,17 @@ async def list_cmd(
                 "/list завтра\n/list 20.06\n/list неделя"
             )
             return
-        start_utc, end_utc = _day_bounds_utc(start_d, end_d, tz_name)
-        tasks = await repo.get_user_tasks_in_range(
-            session, user.id, start_utc, end_utc
-        )
+        tasks = await repo.list_user_tasks(session, user.id)
 
+    occurrences = build_occurrences(tasks, start_d, end_d, tz_name)
     header = f"📅 {label}"
     if start_d == end_d == today:
         # сегодняшний день — делим на предстоящее/прошедшее
         await message.answer(
-            format_day_sections(tasks, tz_name, header, now_utc)
+            format_day_sections(occurrences, tz_name, header, now_utc)
         )
     elif start_d == end_d:
         # другой одиночный день — плоский список
-        await message.answer(format_day_list(tasks, tz_name, header))
+        await message.answer(format_day_list(occurrences, tz_name, header))
     else:
-        await message.answer(format_grouped_by_day(tasks, tz_name, header))
+        await message.answer(format_grouped_by_day(occurrences, tz_name, header))

@@ -100,6 +100,14 @@ async def get_user_tasks_for_date(
     return list(res.scalars().all())
 
 
+async def list_user_tasks(session: AsyncSession, user_id: int) -> list[Task]:
+    """Все задачи пользователя (для раскрытия повторов в просмотре)."""
+    res = await session.execute(
+        select(Task).where(Task.user_id == user_id).order_by(Task.due_at_utc)
+    )
+    return list(res.scalars().all())
+
+
 async def get_user_tasks_in_range(
     session: AsyncSession, user_id: int, start_utc: datetime, end_utc: datetime
 ) -> list[Task]:

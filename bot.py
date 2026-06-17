@@ -2,12 +2,11 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.filters import CommandStart
-from aiogram.types import BotCommand, Message
+from aiogram.types import BotCommand
 
 from config import Settings
 from app.db.base import init_db, init_engine
-from app.handlers import commands, tasks
+from app.handlers import commands, onboarding, settings as settings_handlers, tasks
 from app.services.gemini import GeminiService
 from app.services.scheduler import start_scheduler
 
@@ -39,14 +38,8 @@ async def main() -> None:
     dp["gemini"] = GeminiService(settings.gemini_api_key)
     dp["settings"] = settings
 
-    @dp.message(CommandStart())
-    async def start(message: Message) -> None:
-        await message.answer(
-            "Привет! Я ежедневник 🗓\n"
-            "Напиши свободным текстом, что запланировано — например:\n"
-            "«завтра в 15 встреча с врачом»"
-        )
-
+    dp.include_router(onboarding.router)
+    dp.include_router(settings_handlers.router)
     dp.include_router(commands.router)
     dp.include_router(tasks.router)
 

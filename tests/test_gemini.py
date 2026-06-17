@@ -4,6 +4,7 @@ from google.genai import errors as genai_errors
 from app.services.gemini import (
     GeminiService,
     GeminiUnavailable,
+    build_amend_prompt,
     build_prompt,
     extract_json,
 )
@@ -31,6 +32,23 @@ def test_build_prompt_contains_context():
     assert "Europe/Moscow" in p
     assert "2026-06-17 13:00" in p
     assert "завтра в 15" in p
+
+
+def test_build_amend_prompt_includes_original_and_instruction():
+    current = {
+        "title": "звонок в дс",
+        "datetime_local": "2026-06-18 15:00",
+        "recurrence": "none",
+        "weekday": None,
+    }
+    p = build_amend_prompt(
+        "и ещё помыть собаку", current,
+        tz_name="Europe/Kyiv", now_local="2026-06-18 10:00",
+    )
+    assert "звонок в дс" in p          # исходный title как контекст
+    assert "2026-06-18 15:00" in p     # исходное время
+    assert "и ещё помыть собаку" in p  # инструкция
+    assert "Europe/Kyiv" in p
 
 
 # --- ретраи на временных ошибках ---

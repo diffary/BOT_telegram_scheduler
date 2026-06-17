@@ -10,7 +10,7 @@ from app.db import repo
 from app.db.base import get_sessionmaker
 from app.keyboards.inline import confirm_kb, task_actions_kb
 from app.services.gemini import GeminiService, GeminiUnavailable
-from app.services.parser import NeedsClarification, ParseError, parse
+from app.services.parser import NeedsClarification, parse
 from app.states import EditTask
 from app.utils.tz import to_local
 from config import Settings
@@ -46,12 +46,19 @@ async def _resolve_user(tg_user, settings: Settings):
         return user.id, user.timezone
 
 
-async def _try_parse(text: str, gemini: GeminiService, tz_name: str):
-    """Распознать текст в задачу. Вернуть (ParsedTask|None, error_message|None)."""
-    now_local = to_local(_utc_now_naive(), tz_name).strftime("%Y-%m-%d %H:%M")
+def _now_local_str(tz_name: str) -> str:
+    return to_local(_utc_now_naive(), tz_name).strftime("%Y-%m-%d %H:%M")
+
+
+async def _safe_parse(raw_awaitable, tz_name: str, raw_text: str):
+    """Дождаться сырой dict от Gemini и распарсить.
+
+    Вернуть (ParsedTask|None, error_message|None). Единая обработка ошибок
+    для создания и редактирования.
+    """
     try:
-        raw = await gemini.parse_text(text, tz_name, now_local)
-        return parse(raw, tz_name, text), None
+        raw = await raw_awaitable
+        return parse(raw, tz_name, raw_text), None
     except NeedsClarification:
         return None, (
             "Не понял, на когда это запланировать. Уточни дату и время — "
@@ -63,7 +70,7 @@ async def _try_parse(text: str, gemini: GeminiService, tz_name: str):
             "Сервис распознавания сейчас перегружен 😕 "
             "Попробуй ещё раз через пару секунд."
         )
-    except (ParseError, Exception) as exc:  # кривой JSON и т.п.
+    except Exception as exc:  # ParseError, кривой JSON и т.п.
         log.warning("parse failed: %r", exc)
         return None, (
             "Не смог разобрать 🤔 Попробуй переформулировать, "
@@ -83,7 +90,8 @@ async def on_free_text(
     _, tz_name = await _resolve_user(message.from_user, settings)
     thinking = await message.answer("🤔 Разбираю…")
 
-    parsed, error = await _try_parse(message.text, gemini, tz_name)
+    raw = gemini.parse_text(message.text, tz_name, _now_local_str(tz_name))
+    parsed, error = await _safe_parse(raw, tz_name, message.text)
     if error:
         await thinking.edit_text(error)
         return
@@ -181,7 +189,9 @@ async def on_edit_request(
     await state.set_state(EditTask.waiting_text)
     await state.update_data(edit_task_id=task_id)
     await cb.message.answer(
-        "✏️ Пришли новую формулировку задачи (что и когда). /cancel — отмена."
+        "✏️ Что изменить? Можно дописать («и ещё помыть собаку»), "
+        "перенести время («перенеси на 18:00») или переформулировать целиком. "
+        "/cancel — отмена."
     )
     await cb.answer()
 
@@ -195,9 +205,27 @@ async def on_edit_text(
 ) -> None:
     task_id = (await state.get_data()).get("edit_task_id")
     user_id, tz_name = await _resolve_user(message.from_user, settings)
+
+    maker = get_sessionmaker()
+    async with maker() as session:
+        task = await repo.get_task(session, task_id, user_id)
+    if task is None:
+        await state.clear()
+        await message.answer("Задача не найдена 🤔")
+        return
+
     thinking = await message.answer("🤔 Разбираю…")
 
-    parsed, error = await _try_parse(message.text, gemini, tz_name)
+    # передаём исходную задачу как контекст, чтобы дополнения/правки
+    # опирались на неё, а не парсились с нуля
+    current = {
+        "title": task.title,
+        "datetime_local": to_local(task.due_at_utc, tz_name).strftime("%Y-%m-%d %H:%M"),
+        "recurrence": task.recurrence,
+        "weekday": task.recurrence_weekday,
+    }
+    raw = gemini.amend_text(message.text, current, tz_name, _now_local_str(tz_name))
+    parsed, error = await _safe_parse(raw, tz_name, message.text)
     if error:
         # остаёмся в режиме редактирования — можно прислать ещё раз
         await thinking.edit_text(error)

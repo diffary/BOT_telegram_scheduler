@@ -119,7 +119,7 @@ class GeminiService:
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3.1-flash-lite",
         max_retries: int = 2,
         retry_base_delay: float = 1.5,
     ) -> None:

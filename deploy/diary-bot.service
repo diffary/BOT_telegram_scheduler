@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram Diary Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/BOT_telegram_scheduler
+ExecStart=/home/ubuntu/BOT_telegram_scheduler/.venv/bin/python -u bot.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

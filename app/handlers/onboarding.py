@@ -7,7 +7,7 @@ from app.db import repo
 from app.db.base import get_sessionmaker
 from app.keyboards.inline import timezone_kb
 from app.states import SetTimezone
-from app.utils.tz import resolve_timezone
+from app.utils.tz import is_valid_tz, resolve_timezone
 from config import Settings
 
 router = Router()

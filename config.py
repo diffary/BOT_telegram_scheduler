@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     bot_token: str
     gemini_api_key: str
+    gemini_model: str = "gemini-2.5-flash"
     db_path: str = "diary.db"
     default_tz: str = "Europe/Moscow"
     tick_interval: int = 60

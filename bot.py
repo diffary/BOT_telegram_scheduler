@@ -41,7 +41,7 @@ async def main() -> None:
     dp = Dispatcher()
 
     # Зависимости, доступные хендлерам по имени аргумента.
-    dp["gemini"] = GeminiService(settings.gemini_api_key)
+    dp["gemini"] = GeminiService(settings.gemini_api_key, model=settings.gemini_model)
     dp["settings"] = settings
 
     dp.include_router(onboarding.router)

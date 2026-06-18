@@ -7,7 +7,7 @@ from app.db import repo
 from app.db.base import get_sessionmaker
 from app.keyboards.inline import timezone_kb
 from app.states import SetTimezone
-from app.utils.tz import is_valid_tz
+from app.utils.tz import resolve_timezone
 from config import Settings
 
 router = Router()
@@ -74,8 +74,8 @@ async def tz_set(cb: CallbackQuery, state: FSMContext, settings: Settings) -> No
 async def tz_manual(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SetTimezone.waiting_manual)
     await cb.message.answer(
-        "Пришли часовой пояс в формате IANA, напр. Europe/Kyiv или Asia/Almaty. "
-        "/cancel — отмена."
+        "Напиши свой ГОРОД (напр. «Новосибирск», «Киев») "
+        "или сдвиг от UTC (напр. «+7», «-3»). /cancel — отмена."
     )
     await cb.answer()
 
@@ -84,11 +84,11 @@ async def tz_manual(cb: CallbackQuery, state: FSMContext) -> None:
 async def tz_manual_input(
     message: Message, state: FSMContext, settings: Settings
 ) -> None:
-    tz = message.text.strip()
-    if not is_valid_tz(tz):
+    tz = resolve_timezone(message.text)
+    if tz is None:
         await message.answer(
-            "Не узнал пояс. Примеры: Europe/Kyiv, Europe/Moscow, Asia/Almaty. "
-            "Попробуй ещё раз или /cancel."
+            "Не узнал 🤔 Напиши город (напр. «Новосибирск», «Алматы») "
+            "или сдвиг от UTC (напр. «+7», «-3»). Попробуй ещё раз или /cancel."
         )
         return
     await _save_tz(message.from_user, settings, tz)

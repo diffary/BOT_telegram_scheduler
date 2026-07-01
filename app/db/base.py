@@ -15,10 +15,27 @@ _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
-def init_engine(db_path: str) -> AsyncEngine:
-    """Создать async-engine и фабрику сессий для SQLite по пути db_path."""
+def init_engine(db_path: str, database_url: str | None = None) -> AsyncEngine:
+    """Создать async-engine и фабрику сессий.
+
+    Если задан database_url (напр. Postgres/Supabase) — используем его,
+    иначе локальный SQLite по db_path.
+    """
     global _engine, _sessionmaker
-    _engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    if database_url:
+        url = database_url
+        # позволяем вставлять строку Supabase как есть (postgresql://...)
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        connect_args = {}
+        if "asyncpg" in url:
+            # Supabase/pgbouncer-пул не дружит с кэшем prepared statements asyncpg
+            connect_args["statement_cache_size"] = 0
+        _engine = create_async_engine(
+            url, pool_pre_ping=True, connect_args=connect_args
+        )
+    else:
+        _engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
     _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 

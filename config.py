@@ -24,5 +24,7 @@ class Settings(BaseSettings):
     gemini_api_key: str
     gemini_model: str = "gemini-2.5-flash"
     db_path: str = "diary.db"
+    # Если задан (напр. Supabase Postgres) — используется вместо SQLite.
+    database_url: str | None = None
     default_tz: str = "Europe/Moscow"
     tick_interval: int = 60

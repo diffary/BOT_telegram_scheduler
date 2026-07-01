@@ -34,7 +34,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, force=True)
     settings = Settings()
 
-    init_engine(settings.db_path)
+    init_engine(settings.db_path, settings.database_url)
     await init_db()
 
     bot = Bot(settings.bot_token)
